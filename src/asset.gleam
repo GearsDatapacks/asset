@@ -5,6 +5,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import glexer/token
 import simplifile as file
@@ -32,7 +33,7 @@ fn update_file(path: String, contents: String) -> Nil {
       )
     }
     Ok(module) -> {
-      case find_import(module.imports) {
+      case find_import(contents, module.imports) {
         Error(_) -> Nil
         Ok(import_) -> {
           let edits = find_edits(module.functions, import_)
@@ -53,16 +54,16 @@ type Edit {
 
 fn find_edits(
   functions: List(glance.Definition(glance.Function)),
-  import_: ShouldImport,
+  info: ModuleInfo,
 ) -> List(Edit) {
   functions
   |> list.flat_map(fn(definition) {
-    statements(definition.definition.body, import_)
+    statements(definition.definition.body, info)
   })
   |> list.prepend(Edit(
-    start: import_.location.start,
+    start: info.import_location.start,
     // Add 1 for the proceeding newline
-    end: import_.location.end + 1,
+    end: info.import_location.end + 1,
     text: "",
   ))
   |> list.sort(fn(a, b) { int.compare(a.start, b.start) })
@@ -70,96 +71,91 @@ fn find_edits(
 
 fn statements(
   statements: List(glance.Statement),
-  import_: ShouldImport,
+  info: ModuleInfo,
 ) -> List(Edit) {
-  list.flat_map(statements, statement(_, import_))
+  list.flat_map(statements, statement(_, info))
 }
 
 fn expressions(
   expressions: List(glance.Expression),
-  import_: ShouldImport,
+  info: ModuleInfo,
 ) -> List(Edit) {
-  list.flat_map(expressions, expression(_, import_))
+  list.flat_map(expressions, expression(_, info))
 }
 
-fn statement(statement: glance.Statement, import_: ShouldImport) -> List(Edit) {
+fn statement(statement: glance.Statement, info: ModuleInfo) -> List(Edit) {
   case statement {
     glance.Assert(expression: value, message:, ..) ->
       case message {
-        None -> expression(value, import_)
-        Some(message) -> expressions([value, message], import_)
+        None -> expression(value, info)
+        Some(message) -> expressions([value, message], info)
       }
     glance.Assignment(kind:, value:, ..) ->
       case kind {
-        glance.LetAssert(message: None) | glance.Let ->
-          expression(value, import_)
+        glance.LetAssert(message: None) | glance.Let -> expression(value, info)
         glance.LetAssert(message: Some(message)) ->
-          expressions([value, message], import_)
+          expressions([value, message], info)
       }
-    glance.Expression(e) -> expression(e, import_)
-    glance.Use(function:, ..) -> expression(function, import_)
+    glance.Expression(e) -> expression(e, info)
+    glance.Use(function:, ..) -> expression(function, info)
   }
 }
 
-fn optional(
-  optional: Option(glance.Expression),
-  import_: ShouldImport,
-) -> List(Edit) {
+fn optional(optional: Option(glance.Expression), info: ModuleInfo) -> List(Edit) {
   case optional {
-    Some(e) -> expression(e, import_)
+    Some(e) -> expression(e, info)
     None -> []
   }
 }
 
 fn fields(
   fields: List(glance.Field(glance.Expression)),
-  import_: ShouldImport,
+  info: ModuleInfo,
 ) -> List(Edit) {
   use field <- list.flat_map(fields)
   case field {
     glance.ShorthandField(..) -> []
     glance.UnlabelledField(item:) | glance.LabelledField(item:, ..) ->
-      expression(item, import_)
+      expression(item, info)
   }
 }
 
-fn clauses(clauses: List(glance.Clause), import_: ShouldImport) -> List(Edit) {
+fn clauses(clauses: List(glance.Clause), info: ModuleInfo) -> List(Edit) {
   use clause <- list.flat_map(clauses)
   case clause.guard {
-    None -> expression(clause.body, import_)
-    Some(guard) -> expressions([clause.body, guard], import_)
+    None -> expression(clause.body, info)
+    Some(guard) -> expressions([clause.body, guard], info)
   }
 }
 
-fn expression(ast: glance.Expression, import_: ShouldImport) -> List(Edit) {
+fn expression(ast: glance.Expression, info: ModuleInfo) -> List(Edit) {
   case ast {
-    glance.BinaryOperator(left:, right:, ..) ->
-      expressions([left, right], import_)
+    glance.BinaryOperator(left:, right:, ..) -> expressions([left, right], info)
     glance.BitString(..) -> []
-    glance.Block(statements: body, ..) -> statements(body, import_)
-    glance.Call(function:, arguments:, ..) ->
-      list.append(expression(function, import_), fields(arguments, import_))
+    glance.Block(statements: body, ..) -> statements(body, info)
+    glance.Call(location:, function:, arguments:) ->
+      call(location, function, arguments, info)
     glance.Case(subjects:, clauses: cs, ..) ->
-      list.append(expressions(subjects, import_), clauses(cs, import_))
-    glance.Echo(expression: value, ..) -> optional(value, import_)
-    glance.FieldAccess(container:, ..) -> expression(container, import_)
+      list.append(expressions(subjects, info), clauses(cs, info))
+    glance.Echo(expression: value, ..) -> optional(value, info)
+    glance.FieldAccess(container:, ..) -> expression(container, info)
     glance.Float(..) -> []
-    glance.Fn(body:, ..) -> statements(body, import_)
+    glance.Fn(body:, ..) -> statements(body, info)
     glance.FnCapture(function:, arguments_before:, arguments_after:, ..) ->
       list.flatten([
-        expression(function, import_),
-        fields(arguments_before, import_),
-        fields(arguments_after, import_),
+        expression(function, info),
+        fields(arguments_before, info),
+        fields(arguments_after, info),
       ])
     glance.Int(..) -> []
     glance.List(elements:, rest:, ..) ->
       case rest {
-        None -> expressions(elements, import_)
-        Some(rest) -> expressions([rest, ..elements], import_)
+        None -> expressions(elements, info)
+        Some(rest) -> expressions([rest, ..elements], info)
       }
-    glance.NegateBool(value:, ..) -> expression(value, import_)
-    glance.NegateInt(value:, ..) -> expression(value, import_)
-    glance.Panic(message:, ..) -> optional(message, import_)
+    glance.NegateBool(value:, ..) -> expression(value, info)
+    glance.NegateInt(value:, ..) -> expression(value, info)
+    glance.Panic(message:, ..) -> optional(message, info)
     glance.RecordUpdate(record:, fields:, ..) ->
       expressions(
         [
@@ -168,20 +164,100 @@ fn expression(ast: glance.Expression, import_: ShouldImport) -> List(Edit) {
             option.to_result(field.item, Nil)
           })
         ],
-        import_,
+        info,
       )
     glance.String(..) -> []
-    glance.Todo(message:, ..) -> optional(message, import_)
-    glance.Tuple(elements:, ..) -> expressions(elements, import_)
-    glance.TupleIndex(tuple:, ..) -> expression(tuple, import_)
+    glance.Todo(message:, ..) -> optional(message, info)
+    glance.Tuple(elements:, ..) -> expressions(elements, info)
+    glance.TupleIndex(tuple:, ..) -> expression(tuple, info)
     glance.Variable(..) -> []
   }
 }
 
-fn apply_edits(contents: String, edits: List(Edit)) -> String {
-  list.fold(edits, contents, fn(contents, edit) {
-    replace_span(contents, edit.start, edit.end, edit.text)
+fn call(
+  location: glance.Span,
+  function: glance.Expression,
+  arguments: List(glance.Field(glance.Expression)),
+  info: ModuleInfo,
+) -> List(Edit) {
+  case function {
+    glance.FieldAccess(
+      container: glance.Variable(
+        name: module,
+        ..,
+      ),
+      label: name,
+      ..,
+    ) ->
+      case assertion_function(info, Some(module), name) {
+        Error(_) -> Error(Nil)
+        Ok(BeError) -> Error(Nil)
+        Ok(BeFalse) -> transform_bool_check(arguments, location, False, info)
+        Ok(BeNone) -> Error(Nil)
+        Ok(BeOk) -> Error(Nil)
+        Ok(BeSome) -> Error(Nil)
+        Ok(BeTrue) -> transform_bool_check(arguments, location, True, info)
+        Ok(Equal) -> transform_comparison(arguments, location, "==", info)
+        Ok(NotEqual) -> transform_comparison(arguments, location, "!=", info)
+        Ok(Fail) -> Error(Nil)
+      }
+    _ -> Error(Nil)
+  }
+  |> result.map(list.wrap)
+  |> result.lazy_unwrap(fn() {
+    list.append(expression(function, info), fields(arguments, info))
   })
+}
+
+fn transform_comparison(
+  arguments: List(glance.Field(glance.Expression)),
+  location: glance.Span,
+  operator: String,
+  info: ModuleInfo,
+) -> Result(Edit, Nil) {
+  case arguments {
+    [glance.UnlabelledField(left), glance.UnlabelledField(right)] -> {
+      let left = slice(info.src, left.location.start, left.location.end)
+      let right = slice(info.src, right.location.start, right.location.end)
+
+      let assert_ = "assert " <> left <> " " <> operator <> " " <> right
+      Ok(Edit(location.start, location.end, assert_))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn transform_bool_check(
+  arguments: List(glance.Field(glance.Expression)),
+  location: glance.Span,
+  check_for: Bool,
+  info: ModuleInfo,
+) -> Result(Edit, Nil) {
+  case arguments {
+    [glance.UnlabelledField(value)] -> {
+      let value = slice(info.src, value.location.start, value.location.end)
+
+      let operator = case check_for {
+        False -> "!"
+        True -> ""
+      }
+      let assert_ = "assert " <> operator <> value
+      Ok(Edit(location.start, location.end, assert_))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn apply_edits(contents: String, edits: List(Edit)) -> String {
+  list.fold(edits, #(contents, 0), fn(acc, edit) {
+    let #(contents, offset) = acc
+    let contents =
+      replace_span(contents, edit.start + offset, edit.end + offset, edit.text)
+
+    let edit_offset = string.byte_size(edit.text) + edit.start - edit.end
+    let offset = offset + edit_offset
+    #(contents, offset)
+  }).0
 }
 
 fn replace_span(string: String, start: Int, end: Int, text: String) -> String {
@@ -194,50 +270,72 @@ fn slice(string: String, start: Int, end: Int) -> String {
     -1 -> string.byte_size(string) - start
     _ -> end - start
   }
+
   do_slice(string, start, length)
 }
 
 @external(erlang, "binary", "part")
 fn do_slice(string: String, start: Int, length: Int) -> String
 
-type ShouldImport {
-  ShouldImport(alias: String, location: glance.Span)
+type ModuleInfo {
+  ModuleInfo(import_alias: String, import_location: glance.Span, src: String)
 }
 
-fn is_assertion_function(
-  import_: ShouldImport,
+type AssertionFunction {
+  BeError
+  BeFalse
+  BeNone
+  BeOk
+  BeSome
+  BeTrue
+  Equal
+  Fail
+  NotEqual
+}
+
+fn assertion_function(
+  info: ModuleInfo,
   module: Option(String),
   name: String,
-) -> Bool {
-  module == Some(import_.alias)
-  && case name {
-    "be_error"
-    | "be_false"
-    | "be_none"
-    | "be_ok"
-    | "be_some"
-    | "be_true"
-    | "equal"
-    | "fail"
-    | "not_equal" -> True
-    _ -> False
+) -> Result(AssertionFunction, Nil) {
+  case module == Some(info.import_alias) {
+    False -> Error(Nil)
+    True ->
+      case name {
+        "be_error" -> Ok(BeError)
+        "be_false" -> Ok(BeFalse)
+        "be_none" -> Ok(BeNone)
+        "be_ok" -> Ok(BeOk)
+        "be_some" -> Ok(BeSome)
+        "be_true" -> Ok(BeTrue)
+        "equal" -> Ok(Equal)
+        "fail" -> Ok(Fail)
+        "not_equal" -> Ok(NotEqual)
+        _ -> Error(Nil)
+      }
   }
 }
 
 fn find_import(
+  src: String,
   imports: List(glance.Definition(glance.Import)),
-) -> Result(ShouldImport, Nil) {
+) -> Result(ModuleInfo, Nil) {
   list.find_map(imports, fn(import_) {
     case import_.definition.module {
       "gleeunit/should" ->
         case import_.definition.alias {
           Some(glance.Named(alias)) ->
-            Ok(ShouldImport(alias:, location: import_.definition.location))
+            Ok(ModuleInfo(
+              src:,
+              import_alias: alias,
+              import_location: import_.definition.location,
+            ))
           Some(glance.Discarded(_)) -> Error(Nil)
           None ->
-            Ok(ShouldImport(
-              alias: "should",
-              location: import_.definition.location,
+            Ok(ModuleInfo(
+              src:,
+              import_alias: "should",
+              import_location: import_.definition.location,
             ))
         }
 
