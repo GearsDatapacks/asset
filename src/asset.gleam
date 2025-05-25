@@ -5,6 +5,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import glexer/token
 import simplifile as file
 
@@ -58,6 +59,12 @@ fn find_edits(
   |> list.flat_map(fn(definition) {
     statements(definition.definition.body, import_)
   })
+  |> list.prepend(Edit(
+    start: import_.location.start,
+    // Add 1 for the proceeding newline
+    end: import_.location.end + 1,
+    text: "",
+  ))
   |> list.sort(fn(a, b) { int.compare(a.start, b.start) })
 }
 
@@ -171,12 +178,30 @@ fn expression(ast: glance.Expression, import_: ShouldImport) -> List(Edit) {
   }
 }
 
-fn apply_edits(contents: String, _edits: List(Edit)) -> String {
-  contents
+fn apply_edits(contents: String, edits: List(Edit)) -> String {
+  list.fold(edits, contents, fn(contents, edit) {
+    replace_span(contents, edit.start, edit.end, edit.text)
+  })
 }
 
+fn replace_span(string: String, start: Int, end: Int, text: String) -> String {
+  slice(string, 0, start) <> text <> slice(string, end, -1)
+}
+
+@external(javascript, "./asset_ffi.mjs", "slice")
+fn slice(string: String, start: Int, end: Int) -> String {
+  let length = case end {
+    -1 -> string.byte_size(string) - start
+    _ -> end - start
+  }
+  do_slice(string, start, length)
+}
+
+@external(erlang, "binary", "part")
+fn do_slice(string: String, start: Int, length: Int) -> String
+
 type ShouldImport {
-  ShouldImport(alias: String)
+  ShouldImport(alias: String, location: glance.Span)
 }
 
 fn is_assertion_function(
@@ -206,9 +231,14 @@ fn find_import(
     case import_.definition.module {
       "gleeunit/should" ->
         case import_.definition.alias {
-          Some(glance.Named(alias)) -> Ok(ShouldImport(alias:))
+          Some(glance.Named(alias)) ->
+            Ok(ShouldImport(alias:, location: import_.definition.location))
           Some(glance.Discarded(_)) -> Error(Nil)
-          None -> Ok(ShouldImport(alias: "should"))
+          None ->
+            Ok(ShouldImport(
+              alias: "should",
+              location: import_.definition.location,
+            ))
         }
 
       _ -> Error(Nil)
