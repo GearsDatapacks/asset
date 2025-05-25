@@ -286,16 +286,34 @@ fn transform_assertion(
   }
 }
 
+fn maybe_wrap(
+  expression: glance.Expression,
+  src: String,
+  precedence: Int,
+) -> String {
+  let expr_src = slice(src, expression.location.start, expression.location.end)
+  case expression {
+    glance.BinaryOperator(name:, ..) ->
+      case glance.precedence(name) > precedence {
+        True -> expr_src
+        False -> "{ " <> expr_src <> " }"
+      }
+    _ -> expr_src
+  }
+}
+
 fn transform_comparison(
   arguments: List(glance.Field(glance.Expression)),
   location: glance.Span,
   operator: String,
   info: ModuleInfo,
 ) -> Result(Edit, Nil) {
+  let precedence = glance.precedence(glance.Eq)
+
   case arguments {
     [glance.UnlabelledField(left), glance.UnlabelledField(right)] -> {
-      let left = slice(info.src, left.location.start, left.location.end)
-      let right = slice(info.src, right.location.start, right.location.end)
+      let left = maybe_wrap(left, info.src, precedence)
+      let right = maybe_wrap(right, info.src, precedence)
 
       let assert_ = "assert " <> left <> " " <> operator <> " " <> right
       Ok(Edit(location.start, location.end, assert_))
@@ -312,13 +330,16 @@ fn transform_bool_check(
 ) -> Result(Edit, Nil) {
   case arguments {
     [glance.UnlabelledField(value)] -> {
-      let value = slice(info.src, value.location.start, value.location.end)
-
-      let operator = case check_for {
-        False -> "!"
-        True -> ""
+      let assert_ = case check_for {
+        False -> {
+          let value = maybe_wrap(value, info.src, 100)
+          "assert !" <> value
+        }
+        True -> {
+          let value = slice(info.src, value.location.start, value.location.end)
+          "assert " <> value
+        }
       }
-      let assert_ = "assert " <> operator <> value
       Ok(Edit(location.start, location.end, assert_))
     }
     _ -> Error(Nil)
