@@ -10,22 +10,26 @@ import gleam/string
 import glexer/token
 import simplifile as file
 
+const should_module = "gleeunit/should"
+
 pub fn main() -> Nil {
   let argv = argv.load()
 
   case argv.arguments {
-    ["update"] -> update(".")
-    ["update", directory] -> update(directory)
+    ["update"] -> update(".", should_module)
+    ["update", directory] -> update(directory, should_module)
+    ["update", "-m", module] -> update(".", module)
+    ["update", directory, "-m", module] -> update(directory, module)
     _ -> print_usage(argv.program)
   }
 }
 
-fn update(directory: String) -> Nil {
+fn update(directory: String, module: String) -> Nil {
   let files = collect_files(directory)
-  list.each(files, fn(pair) { update_file(pair.0, pair.1) })
+  list.each(files, fn(pair) { update_file(pair.0, pair.1, module) })
 }
 
-fn update_file(path: String, contents: String) -> Nil {
+fn update_file(path: String, contents: String, target_module: String) -> Nil {
   case glance.module(contents) {
     Error(error) -> {
       io.println_error(
@@ -33,7 +37,7 @@ fn update_file(path: String, contents: String) -> Nil {
       )
     }
     Ok(module) -> {
-      case find_import(contents, module.imports) {
+      case find_import(contents, module.imports, target_module) {
         Error(_) -> Nil
         Ok(import_) -> {
           let edits = find_edits(module.functions, import_)
@@ -417,10 +421,11 @@ fn assertion_function(
 fn find_import(
   src: String,
   imports: List(glance.Definition(glance.Import)),
+  module: String,
 ) -> Result(ModuleInfo, Nil) {
   list.find_map(imports, fn(import_) {
     case import_.definition.module {
-      "gleeunit/should" ->
+      m if m == module ->
         case import_.definition.alias {
           Some(glance.Named(alias)) ->
             Ok(ModuleInfo(
@@ -432,7 +437,9 @@ fn find_import(
           None ->
             Ok(ModuleInfo(
               src:,
-              import_alias: "should",
+              import_alias: string.split(module, "/")
+                |> list.last
+                |> result.unwrap(""),
               import_location: import_.definition.location,
             ))
         }
@@ -482,7 +489,10 @@ fn print_error(action: String, path: String, error: file.FileError) -> Nil {
 }
 
 fn print_usage(program: String) -> Nil {
-  io.println("Usage: " <> program <> " update [directory]")
+  io.println("Usage: " <> program <> " update [directory]
+  
+Flags:
+  -m <test module>  Changes the target module to replace, defaults to `gleeunit/should`.")
 }
 
 fn glance_error(error: glance.Error) -> String {
