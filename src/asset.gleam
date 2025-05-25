@@ -130,7 +130,13 @@ fn clauses(clauses: List(glance.Clause), info: ModuleInfo) -> List(Edit) {
 
 fn expression(ast: glance.Expression, info: ModuleInfo) -> List(Edit) {
   case ast {
-    glance.BinaryOperator(left:, right:, ..) -> expressions([left, right], info)
+    glance.BinaryOperator(location:, name:, left:, right:) ->
+      case name {
+        glance.Pipe -> pipe(left, right, location, info)
+        _ -> Error(Nil)
+      }
+      |> result.map(list.wrap)
+      |> result.lazy_unwrap(fn() { expressions([left, right], info) })
     glance.BitString(..) -> []
     glance.Block(statements: body, ..) -> statements(body, info)
     glance.Call(location:, function:, arguments:) ->
@@ -174,12 +180,16 @@ fn expression(ast: glance.Expression, info: ModuleInfo) -> List(Edit) {
   }
 }
 
-fn call(
-  location: glance.Span,
+fn pipe_args(
+  left: glance.Expression,
+  args: List(glance.Field(glance.Expression)),
+) -> List(glance.Field(glance.Expression)) {
+  [glance.UnlabelledField(left), ..args]
+}
+
+fn called_function(
   function: glance.Expression,
-  arguments: List(glance.Field(glance.Expression)),
-  info: ModuleInfo,
-) -> List(Edit) {
+) -> Result(#(Option(String), String), Nil) {
   case function {
     glance.FieldAccess(
       container: glance.Variable(
@@ -188,25 +198,92 @@ fn call(
       ),
       label: name,
       ..,
-    ) ->
-      case assertion_function(info, Some(module), name) {
-        Error(_) -> Error(Nil)
-        Ok(BeError) -> Error(Nil)
-        Ok(BeFalse) -> transform_bool_check(arguments, location, False, info)
-        Ok(BeNone) -> Error(Nil)
-        Ok(BeOk) -> Error(Nil)
-        Ok(BeSome) -> Error(Nil)
-        Ok(BeTrue) -> transform_bool_check(arguments, location, True, info)
-        Ok(Equal) -> transform_comparison(arguments, location, "==", info)
-        Ok(NotEqual) -> transform_comparison(arguments, location, "!=", info)
-        Ok(Fail) -> Error(Nil)
-      }
+    ) -> Ok(#(Some(module), name))
+    glance.Variable(name:, ..) -> Ok(#(None, name))
+
     _ -> Error(Nil)
   }
+}
+
+fn pipe(
+  left: glance.Expression,
+  right: glance.Expression,
+  location: glance.Span,
+  info: ModuleInfo,
+) -> Result(Edit, Nil) {
+  case right {
+    glance.FieldAccess(
+      container: glance.Variable(
+        name: module,
+        ..,
+      ),
+      label: name,
+      ..,
+    ) ->
+      transform_assertion(
+        Some(module),
+        name,
+        location,
+        pipe_args(left, []),
+        info,
+      )
+    glance.Variable(name:, ..) ->
+      transform_assertion(None, name, location, pipe_args(left, []), info)
+    glance.Call(function:, arguments:, ..) ->
+      function
+      |> called_function
+      |> result.try(fn(pair) {
+        let #(module, name) = pair
+        transform_assertion(
+          module,
+          name,
+          location,
+          pipe_args(left, arguments),
+          info,
+        )
+      })
+
+    _ -> Error(Nil)
+  }
+}
+
+fn call(
+  location: glance.Span,
+  function: glance.Expression,
+  arguments: List(glance.Field(glance.Expression)),
+  info: ModuleInfo,
+) -> List(Edit) {
+  function
+  |> called_function
+  |> result.try(fn(pair) {
+    let #(module, name) = pair
+    transform_assertion(module, name, location, arguments, info)
+  })
   |> result.map(list.wrap)
   |> result.lazy_unwrap(fn() {
     list.append(expression(function, info), fields(arguments, info))
   })
+}
+
+fn transform_assertion(
+  module: Option(String),
+  name: String,
+  location: glance.Span,
+  arguments: List(glance.Field(glance.Expression)),
+  info: ModuleInfo,
+) -> Result(Edit, Nil) {
+  case assertion_function(info, module, name) {
+    Error(_) -> Error(Nil)
+    Ok(BeError) -> Error(Nil)
+    Ok(BeFalse) -> transform_bool_check(arguments, location, False, info)
+    Ok(BeNone) -> Error(Nil)
+    Ok(BeOk) -> Error(Nil)
+    Ok(BeSome) -> Error(Nil)
+    Ok(BeTrue) -> transform_bool_check(arguments, location, True, info)
+    Ok(Equal) -> transform_comparison(arguments, location, "==", info)
+    Ok(NotEqual) -> transform_comparison(arguments, location, "!=", info)
+    Ok(Fail) -> Error(Nil)
+  }
 }
 
 fn transform_comparison(
