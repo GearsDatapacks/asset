@@ -37,7 +37,15 @@ fn update_file(path: String, contents: String, target_module: String) -> Nil {
       )
     }
     Ok(module) -> {
-      case find_import(contents, module.imports, target_module) {
+      let info =
+        ModuleInfo(
+          import_alias: "",
+          import_location: glance.Span(0, 0),
+          option_import: None,
+          src: contents,
+        )
+
+      case find_import(module.imports, target_module, info) {
         Error(_) -> Nil
         Ok(import_) -> {
           let edits = find_edits(module.functions, import_)
@@ -83,31 +91,38 @@ fn statements(
 fn expressions(
   expressions: List(glance.Expression),
   info: ModuleInfo,
+  statement_start: Int,
 ) -> List(Edit) {
-  list.flat_map(expressions, expression(_, info))
+  list.flat_map(expressions, expression(_, info, statement_start))
 }
 
 fn statement(statement: glance.Statement, info: ModuleInfo) -> List(Edit) {
   case statement {
-    glance.Assert(expression: value, message:, ..) ->
+    glance.Assert(expression: value, message:, location:) ->
       case message {
-        None -> expression(value, info)
-        Some(message) -> expressions([value, message], info)
+        None -> expression(value, info, location.start)
+        Some(message) -> expressions([value, message], info, location.start)
       }
-    glance.Assignment(kind:, value:, ..) ->
+    glance.Assignment(kind:, value:, location:, ..) ->
       case kind {
-        glance.LetAssert(message: None) | glance.Let -> expression(value, info)
+        glance.LetAssert(message: None) | glance.Let ->
+          expression(value, info, location.start)
         glance.LetAssert(message: Some(message)) ->
-          expressions([value, message], info)
+          expressions([value, message], info, location.start)
       }
-    glance.Expression(e) -> expression(e, info)
-    glance.Use(function:, ..) -> expression(function, info)
+    glance.Expression(e) -> expression(e, info, e.location.start)
+    glance.Use(function:, location:, ..) ->
+      expression(function, info, location.start)
   }
 }
 
-fn optional(optional: Option(glance.Expression), info: ModuleInfo) -> List(Edit) {
+fn optional(
+  optional: Option(glance.Expression),
+  info: ModuleInfo,
+  statement_start: Int,
+) -> List(Edit) {
   case optional {
-    Some(e) -> expression(e, info)
+    Some(e) -> expression(e, info, statement_start)
     None -> []
   }
 }
@@ -115,57 +130,71 @@ fn optional(optional: Option(glance.Expression), info: ModuleInfo) -> List(Edit)
 fn fields(
   fields: List(glance.Field(glance.Expression)),
   info: ModuleInfo,
+  statement_start: Int,
 ) -> List(Edit) {
   use field <- list.flat_map(fields)
   case field {
     glance.ShorthandField(..) -> []
     glance.UnlabelledField(item:) | glance.LabelledField(item:, ..) ->
-      expression(item, info)
+      expression(item, info, statement_start)
   }
 }
 
-fn clauses(clauses: List(glance.Clause), info: ModuleInfo) -> List(Edit) {
+fn clauses(
+  clauses: List(glance.Clause),
+  info: ModuleInfo,
+  statement_start: Int,
+) -> List(Edit) {
   use clause <- list.flat_map(clauses)
   case clause.guard {
-    None -> expression(clause.body, info)
-    Some(guard) -> expressions([clause.body, guard], info)
+    None -> expression(clause.body, info, statement_start)
+    Some(guard) -> expressions([clause.body, guard], info, statement_start)
   }
 }
 
-fn expression(ast: glance.Expression, info: ModuleInfo) -> List(Edit) {
+fn expression(
+  ast: glance.Expression,
+  info: ModuleInfo,
+  statement_start: Int,
+) -> List(Edit) {
   case ast {
     glance.BinaryOperator(location:, name:, left:, right:) ->
       case name {
-        glance.Pipe -> pipe(left, right, location, info)
+        glance.Pipe -> pipe(left, right, location, info, statement_start)
         _ -> Error(Nil)
       }
-      |> result.map(list.wrap)
-      |> result.lazy_unwrap(fn() { expressions([left, right], info) })
+      |> result.lazy_unwrap(fn() {
+        expressions([left, right], info, statement_start)
+      })
     glance.BitString(..) -> []
     glance.Block(statements: body, ..) -> statements(body, info)
     glance.Call(location:, function:, arguments:) ->
-      call(location, function, arguments, info)
+      call(location, function, arguments, info, statement_start)
     glance.Case(subjects:, clauses: cs, ..) ->
-      list.append(expressions(subjects, info), clauses(cs, info))
-    glance.Echo(expression: value, ..) -> optional(value, info)
-    glance.FieldAccess(container:, ..) -> expression(container, info)
+      list.append(
+        expressions(subjects, info, statement_start),
+        clauses(cs, info, statement_start),
+      )
+    glance.Echo(expression: value, ..) -> optional(value, info, statement_start)
+    glance.FieldAccess(container:, ..) ->
+      expression(container, info, statement_start)
     glance.Float(..) -> []
     glance.Fn(body:, ..) -> statements(body, info)
     glance.FnCapture(function:, arguments_before:, arguments_after:, ..) ->
       list.flatten([
-        expression(function, info),
-        fields(arguments_before, info),
-        fields(arguments_after, info),
+        expression(function, info, statement_start),
+        fields(arguments_before, info, statement_start),
+        fields(arguments_after, info, statement_start),
       ])
     glance.Int(..) -> []
     glance.List(elements:, rest:, ..) ->
       case rest {
-        None -> expressions(elements, info)
-        Some(rest) -> expressions([rest, ..elements], info)
+        None -> expressions(elements, info, statement_start)
+        Some(rest) -> expressions([rest, ..elements], info, statement_start)
       }
-    glance.NegateBool(value:, ..) -> expression(value, info)
-    glance.NegateInt(value:, ..) -> expression(value, info)
-    glance.Panic(message:, ..) -> optional(message, info)
+    glance.NegateBool(value:, ..) -> expression(value, info, statement_start)
+    glance.NegateInt(value:, ..) -> expression(value, info, statement_start)
+    glance.Panic(message:, ..) -> optional(message, info, statement_start)
     glance.RecordUpdate(record:, fields:, ..) ->
       expressions(
         [
@@ -175,11 +204,12 @@ fn expression(ast: glance.Expression, info: ModuleInfo) -> List(Edit) {
           })
         ],
         info,
+        statement_start,
       )
     glance.String(..) -> []
-    glance.Todo(message:, ..) -> optional(message, info)
-    glance.Tuple(elements:, ..) -> expressions(elements, info)
-    glance.TupleIndex(tuple:, ..) -> expression(tuple, info)
+    glance.Todo(message:, ..) -> optional(message, info, statement_start)
+    glance.Tuple(elements:, ..) -> expressions(elements, info, statement_start)
+    glance.TupleIndex(tuple:, ..) -> expression(tuple, info, statement_start)
     glance.Variable(..) -> []
   }
 }
@@ -214,7 +244,8 @@ fn pipe(
   right: glance.Expression,
   location: glance.Span,
   info: ModuleInfo,
-) -> Result(Edit, Nil) {
+  statement_start: Int,
+) -> Result(List(Edit), Nil) {
   case right {
     glance.FieldAccess(
       container: glance.Variable(
@@ -230,9 +261,17 @@ fn pipe(
         location,
         pipe_args(left, []),
         info,
+        statement_start,
       )
     glance.Variable(name:, ..) ->
-      transform_assertion(None, name, location, pipe_args(left, []), info)
+      transform_assertion(
+        None,
+        name,
+        location,
+        pipe_args(left, []),
+        info,
+        statement_start,
+      )
     glance.Call(function:, arguments:, ..) ->
       function
       |> called_function
@@ -244,6 +283,7 @@ fn pipe(
           location,
           pipe_args(left, arguments),
           info,
+          statement_start,
         )
       })
 
@@ -256,16 +296,26 @@ fn call(
   function: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
   info: ModuleInfo,
+  statement_start: Int,
 ) -> List(Edit) {
   function
   |> called_function
   |> result.try(fn(pair) {
     let #(module, name) = pair
-    transform_assertion(module, name, location, arguments, info)
+    transform_assertion(
+      module,
+      name,
+      location,
+      arguments,
+      info,
+      statement_start,
+    )
   })
-  |> result.map(list.wrap)
   |> result.lazy_unwrap(fn() {
-    list.append(expression(function, info), fields(arguments, info))
+    list.append(
+      expression(function, info, statement_start),
+      fields(arguments, info, statement_start),
+    )
   })
 }
 
@@ -275,19 +325,83 @@ fn transform_assertion(
   location: glance.Span,
   arguments: List(glance.Field(glance.Expression)),
   info: ModuleInfo,
-) -> Result(Edit, Nil) {
+  statement_start: Int,
+) -> Result(List(Edit), Nil) {
   case assertion_function(info, module, name) {
     Error(_) -> Error(Nil)
-    Ok(BeError) -> Error(Nil)
+    Ok(BeError) ->
+      transform_variant_check(
+        arguments,
+        location,
+        "Error",
+        info,
+        statement_start,
+      )
     Ok(BeFalse) -> transform_bool_check(arguments, location, False, info)
-    Ok(BeNone) -> Error(Nil)
-    Ok(BeOk) -> Error(Nil)
-    Ok(BeSome) -> Error(Nil)
+    Ok(BeNone) -> {
+      case arguments {
+        [glance.UnlabelledField(value)] -> {
+          let precedence = glance.precedence(glance.Eq)
+          let value = maybe_wrap(value, info.src, precedence)
+          let #(none, edits) = option_constructor(NoneConstructor, info)
+
+          let assert_ = "assert " <> value <> " == " <> none
+          Ok([Edit(location.start, location.end, assert_), ..edits])
+        }
+        _ -> Error(Nil)
+      }
+    }
+    Ok(BeOk) ->
+      transform_variant_check(arguments, location, "Ok", info, statement_start)
+    Ok(BeSome) -> {
+      let #(some, import_edits) = option_constructor(SomeConstructor, info)
+      let result =
+        transform_variant_check(
+          arguments,
+          location,
+          some,
+          info,
+          statement_start,
+        )
+      result.map(result, list.append(import_edits, _))
+    }
     Ok(BeTrue) -> transform_bool_check(arguments, location, True, info)
     Ok(Equal) -> transform_comparison(arguments, location, "==", info)
     Ok(NotEqual) -> transform_comparison(arguments, location, "!=", info)
-    Ok(Fail) -> Error(Nil)
+    Ok(Fail) -> Ok([Edit(location.start, location.end, "panic")])
   }
+}
+
+type OptionConstructor {
+  SomeConstructor
+  NoneConstructor
+}
+
+fn option_constructor(
+  constructor: OptionConstructor,
+  info: ModuleInfo,
+) -> #(String, List(Edit)) {
+  let #(import_, edits) = case info.option_import {
+    None -> {
+      let import_ =
+        OptionImport(alias: "option", some_name: None, none_name: None)
+      #(import_, [Edit(0, 0, "import gleam/option")])
+    }
+    Some(i) -> #(i, [])
+  }
+  let name = case constructor {
+    NoneConstructor ->
+      case import_.none_name {
+        None -> import_.alias <> ".None"
+        Some(name) -> name
+      }
+    SomeConstructor ->
+      case import_.some_name {
+        None -> import_.alias <> ".Some"
+        Some(name) -> name
+      }
+  }
+  #(name, edits)
 }
 
 fn maybe_wrap(
@@ -311,7 +425,7 @@ fn transform_comparison(
   location: glance.Span,
   operator: String,
   info: ModuleInfo,
-) -> Result(Edit, Nil) {
+) -> Result(List(Edit), Nil) {
   let precedence = glance.precedence(glance.Eq)
 
   case arguments {
@@ -320,7 +434,7 @@ fn transform_comparison(
       let right = maybe_wrap(right, info.src, precedence)
 
       let assert_ = "assert " <> left <> " " <> operator <> " " <> right
-      Ok(Edit(location.start, location.end, assert_))
+      Ok([Edit(location.start, location.end, assert_)])
     }
     _ -> Error(Nil)
   }
@@ -331,7 +445,7 @@ fn transform_bool_check(
   location: glance.Span,
   check_for: Bool,
   info: ModuleInfo,
-) -> Result(Edit, Nil) {
+) -> Result(List(Edit), Nil) {
   case arguments {
     [glance.UnlabelledField(value)] -> {
       let assert_ = case check_for {
@@ -344,7 +458,29 @@ fn transform_bool_check(
           "assert " <> value
         }
       }
-      Ok(Edit(location.start, location.end, assert_))
+      Ok([Edit(location.start, location.end, assert_)])
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn transform_variant_check(
+  arguments: List(glance.Field(glance.Expression)),
+  location: glance.Span,
+  variant_name: String,
+  info: ModuleInfo,
+  statement_start: Int,
+) -> Result(List(Edit), Nil) {
+  case arguments {
+    [glance.UnlabelledField(value)] -> {
+      let value = slice(info.src, value.location.start, value.location.end)
+      let assignment =
+        "let assert " <> variant_name <> "(value) = " <> value <> "\n"
+
+      Ok([
+        Edit(statement_start, statement_start, assignment),
+        Edit(location.start, location.end, "value"),
+      ])
     }
     _ -> Error(Nil)
   }
@@ -380,7 +516,20 @@ fn slice(string: String, start: Int, end: Int) -> String {
 fn do_slice(string: String, start: Int, length: Int) -> String
 
 type ModuleInfo {
-  ModuleInfo(import_alias: String, import_location: glance.Span, src: String)
+  ModuleInfo(
+    import_alias: String,
+    import_location: glance.Span,
+    option_import: Option(OptionImport),
+    src: String,
+  )
+}
+
+type OptionImport {
+  OptionImport(
+    alias: String,
+    some_name: Option(String),
+    none_name: Option(String),
+  )
 }
 
 type AssertionFunction {
@@ -419,34 +568,85 @@ fn assertion_function(
 }
 
 fn find_import(
-  src: String,
   imports: List(glance.Definition(glance.Import)),
   module: String,
+  info: ModuleInfo,
 ) -> Result(ModuleInfo, Nil) {
-  list.find_map(imports, fn(import_) {
-    case import_.definition.module {
-      m if m == module ->
-        case import_.definition.alias {
-          Some(glance.Named(alias)) ->
-            Ok(ModuleInfo(
-              src:,
-              import_alias: alias,
-              import_location: import_.definition.location,
-            ))
-          Some(glance.Discarded(_)) -> Error(Nil)
-          None ->
-            Ok(ModuleInfo(
-              src:,
-              import_alias: string.split(module, "/")
-                |> list.last
-                |> result.unwrap(""),
-              import_location: import_.definition.location,
-            ))
+  case imports {
+    [] ->
+      case info.import_alias {
+        "" -> Error(Nil)
+        _ -> Ok(info)
+      }
+    [import_, ..imports] ->
+      case import_.definition.module {
+        "gleam/option" -> {
+          let alias = case import_.definition.alias {
+            Some(glance.Named(alias)) -> alias
+            Some(glance.Discarded(_)) | None -> "option"
+          }
+
+          let some_name =
+            import_.definition.unqualified_values
+            |> list.find_map(fn(value) {
+              case value.name {
+                "Some" -> Ok(value.alias |> option.unwrap("Some"))
+                _ -> Error(Nil)
+              }
+            })
+            |> option.from_result
+
+          let none_name =
+            import_.definition.unqualified_values
+            |> list.find_map(fn(value) {
+              case value.name {
+                "None" -> Ok(value.alias |> option.unwrap("None"))
+                _ -> Error(Nil)
+              }
+            })
+            |> option.from_result
+
+          find_import(
+            imports,
+            module,
+            ModuleInfo(
+              ..info,
+              option_import: Some(OptionImport(alias:, some_name:, none_name:)),
+            ),
+          )
         }
 
-      _ -> Error(Nil)
-    }
-  })
+        m if m == module ->
+          case import_.definition.alias {
+            Some(glance.Named(alias)) ->
+              find_import(
+                imports,
+                module,
+                ModuleInfo(
+                  ..info,
+                  import_alias: alias,
+                  import_location: import_.definition.location,
+                ),
+              )
+
+            Some(glance.Discarded(_)) -> Error(Nil)
+            None ->
+              find_import(
+                imports,
+                module,
+                ModuleInfo(
+                  ..info,
+                  import_alias: string.split(module, "/")
+                    |> list.last
+                    |> result.unwrap(""),
+                  import_location: import_.definition.location,
+                ),
+              )
+          }
+
+        _ -> find_import(imports, module, info)
+      }
+  }
 }
 
 fn collect_files(directory: String) -> List(#(String, String)) {
