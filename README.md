@@ -1,20 +1,20 @@
-# ask
+# asset
 
-[![Package Version](https://img.shields.io/hexpm/v/ask)](https://hex.pm/packages/ask)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/ask/)
+[![Package Version](https://img.shields.io/hexpm/v/asset)](https://hex.pm/packages/asset)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/asset/)
 
 ```sh
-gleam add ask@1
+gleam add asset@1
 ```
 ```gleam
-import ask
+import asset
 
 pub fn main() -> Nil {
   // TODO: An example of the project in use
 }
 ```
 
-Further documentation can be found at <https://hexdocs.pm/ask>.
+Further documentation can be found at <https://hexdocs.pm/asset>.
 
 ## Development
 
