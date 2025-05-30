@@ -610,6 +610,9 @@ fn transform_variant_check(
         Expression | InsideAssertion -> "value"
         Statement -> "_"
       }
+
+      let indent = find_indent(info.src, statement_start)
+
       let assignment =
         "let assert "
         <> variant_name
@@ -618,6 +621,7 @@ fn transform_variant_check(
         <> ") = "
         <> value
         <> "\n"
+        <> string.repeat(" ", indent)
 
       case position {
         Expression ->
@@ -645,6 +649,19 @@ fn transform_variant_check(
       }
     }
     _ -> Error(Nil)
+  }
+}
+
+fn find_indent(src: String, position: Int) -> Int {
+  let until_position = slice(src, 0, position)
+
+  count_indentation(until_position, 0)
+}
+
+fn count_indentation(text: String, count: Int) -> Int {
+  case string.ends_with(text, " ") {
+    False -> count
+    True -> count_indentation(string.drop_end(text, 1), count + 1)
   }
 }
 
