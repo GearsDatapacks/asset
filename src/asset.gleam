@@ -5,6 +5,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/pair
 import gleam/result
 import gleam/string
@@ -21,7 +22,7 @@ pub fn main() -> Nil {
     ["update", directory] -> update(directory, should_module)
     ["update", "-m", module] -> update(".", module)
     ["update", directory, "-m", module] -> update(directory, module)
-    _ -> print_usage(argv.program)
+    _ -> print_usage()
   }
 }
 
@@ -30,12 +31,18 @@ fn update(directory: String, module: String) -> Nil {
   list.each(files, fn(pair) { update_file(pair.0, pair.1, module) })
 }
 
-fn update_file(path: String, contents: String, target_module: String) -> Nil {
+pub type Error {
+  ParsingFailed(glance.Error)
+  NoImportFound
+}
+
+pub fn update_text(
+  contents: String,
+  target_module: String,
+) -> Result(String, Error) {
   case glance.module(contents) {
     Error(error) -> {
-      io.println_error(
-        "Failed to parse file " <> path <> ": " <> glance_error(error),
-      )
+      Error(ParsingFailed(error))
     }
     Ok(module) -> {
       let info =
@@ -47,17 +54,29 @@ fn update_file(path: String, contents: String, target_module: String) -> Nil {
         )
 
       case find_import(module.imports, target_module, info) {
-        Error(_) -> Nil
+        Error(_) -> Error(NoImportFound)
         Ok(import_) -> {
           let edits = find_edits(module.functions, import_)
           let result = apply_edits(contents, edits)
-          case file.write(path, result) {
-            Error(error) -> print_error("write to file", path, error)
-            Ok(_) -> Nil
-          }
+          Ok(result)
         }
       }
     }
+  }
+}
+
+fn update_file(path: String, contents: String, target_module: String) -> Nil {
+  case update_text(contents, target_module) {
+    Error(NoImportFound) -> Nil
+    Error(ParsingFailed(error)) ->
+      io.println_error(
+        "Failed to parse file " <> path <> ": " <> glance_error(error),
+      )
+    Ok(text) ->
+      case file.write(path, text) {
+        Error(error) -> print_error("write to file", path, error)
+        Ok(_) -> Nil
+      }
   }
 }
 
@@ -79,7 +98,9 @@ fn find_edits(
     end: info.import_location.end + 1,
     text: "",
   ))
-  |> list.sort(fn(a, b) { int.compare(a.start, b.start) })
+  |> list.sort(fn(a, b) {
+    int.compare(a.start, b.start) |> order.break_tie(int.compare(a.end, b.end))
+  })
 }
 
 fn statements(
@@ -479,7 +500,7 @@ fn option_constructor(
     None -> {
       let import_ =
         OptionImport(alias: "option", some_name: None, none_name: None)
-      #(import_, [Edit(0, 0, "import gleam/option")])
+      #(import_, [Edit(0, 0, "import gleam/option\n")])
     }
     Some(i) -> #(i, [])
   }
@@ -611,7 +632,13 @@ fn transform_variant_check(
         Statement -> "_"
       }
 
-      let indent = find_indent(info.src, statement_start)
+      let newline = case position {
+        Expression | InsideAssertion -> {
+          let indent = find_indent(info.src, statement_start)
+          "\n" <> string.repeat(" ", indent)
+        }
+        Statement -> ""
+      }
 
       let assignment =
         "let assert "
@@ -620,8 +647,7 @@ fn transform_variant_check(
         <> variable_name
         <> ") = "
         <> value
-        <> "\n"
-        <> string.repeat(" ", indent)
+        <> newline
 
       case position {
         Expression ->
@@ -867,11 +893,13 @@ fn print_error(action: String, path: String, error: file.FileError) -> Nil {
   )
 }
 
-fn print_usage(program: String) -> Nil {
-  io.println("Usage: " <> program <> " update [directory]
+fn print_usage() -> Nil {
+  io.println(
+    "Usage: asset update [directory]
   
 Flags:
-  -m <test module>  Changes the target module to replace, defaults to `gleeunit/should`.")
+  -m <test module>  Changes the target module to replace, defaults to `gleeunit/should`.",
+  )
 }
 
 fn glance_error(error: glance.Error) -> String {

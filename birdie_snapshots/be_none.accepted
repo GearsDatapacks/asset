@@ -1,0 +1,21 @@
+---
+version: 1.3.1
+title: be_none
+file: ./test/asset_test.gleam
+test_name: be_none_test
+---
+---- ORIGINAL CODE
+
+import gleeunit/should
+
+pub fn the_test() {
+  should.be_none(maybe)
+}
+
+---- AFTER UPDATE
+
+import gleam/option
+
+pub fn the_test() {
+  assert maybe == option.None
+}

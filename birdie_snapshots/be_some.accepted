@@ -1,0 +1,21 @@
+---
+version: 1.3.1
+title: be_some
+file: ./test/asset_test.gleam
+test_name: be_some_test
+---
+---- ORIGINAL CODE
+
+import gleeunit/should
+
+pub fn the_test() {
+  should.be_some(maybe)
+}
+
+---- AFTER UPDATE
+
+import gleam/option
+
+pub fn the_test() {
+  let assert option.Some(_) = maybe
+}
