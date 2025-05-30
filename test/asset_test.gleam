@@ -14,11 +14,14 @@ pub fn the_test() {
   <code>
 }"
 
+const default_options = Options(
+  module: "gleeunit/should",
+  alias: None,
+  other_import: None,
+)
+
 fn snap(code: String) {
-  snap_with_options(
-    code,
-    Options(module: "gleeunit/should", alias: None, other_import: None),
-  )
+  snap_with_options(code, default_options)
 }
 
 type Options {
@@ -101,4 +104,78 @@ pub fn fail_test() {
   "should.fail()"
   |> snap
   |> birdie.snap("fail")
+}
+
+pub fn other_import_remains_test() {
+  "should.equal(a, b)"
+  |> snap_with_options(
+    Options(..default_options, other_import: Some("some_other_module")),
+  )
+  |> birdie.snap("other_import_remains")
+}
+
+pub fn different_module_test() {
+  "expect.equal(a, b)"
+  |> snap_with_options(Options(..default_options, module: "glest/expect"))
+  |> birdie.snap("different_module")
+}
+
+pub fn module_alias_test() {
+  "expect.equal(a, b)"
+  |> snap_with_options(Options(..default_options, alias: Some("expect")))
+  |> birdie.snap("module_alias")
+}
+
+pub fn option_already_imported_test() {
+  "should.be_some(thing)"
+  |> snap_with_options(
+    Options(..default_options, other_import: Some("gleam/option")),
+  )
+  |> birdie.snap("option_already_imported")
+}
+
+pub fn option_already_imported_aliased_test() {
+  "should.be_some(thing)"
+  |> snap_with_options(
+    Options(..default_options, other_import: Some("gleam/option as maybe")),
+  )
+  |> birdie.snap("option_already_imported_aliased")
+}
+
+pub fn some_already_imported_unqualified_test() {
+  "should.be_some(thing)"
+  |> snap_with_options(
+    Options(..default_options, other_import: Some("gleam/option.{Some}")),
+  )
+  |> birdie.snap("some_already_imported_unqualified")
+}
+
+pub fn none_already_imported_unqualified_test() {
+  "should.be_none(thing)"
+  |> snap_with_options(
+    Options(..default_options, other_import: Some("gleam/option.{None}")),
+  )
+  |> birdie.snap("none_already_imported_unqualified")
+}
+
+pub fn some_already_imported_aliased_test() {
+  "should.be_some(thing)"
+  |> snap_with_options(
+    Options(
+      ..default_options,
+      other_import: Some("gleam/option.{Some as Present}"),
+    ),
+  )
+  |> birdie.snap("some_already_imported_aliased")
+}
+
+pub fn none_already_imported_aliased_test() {
+  "should.be_none(thing)"
+  |> snap_with_options(
+    Options(
+      ..default_options,
+      other_import: Some("gleam/option.{None as Nothing}"),
+    ),
+  )
+  |> birdie.snap("none_already_imported_aliased")
 }

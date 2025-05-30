@@ -1,0 +1,22 @@
+---
+version: 1.3.1
+title: none_already_imported_unqualified
+file: ./test/asset_test.gleam
+test_name: none_already_imported_unqualified_test
+---
+---- ORIGINAL CODE
+
+import gleeunit/should
+import gleam/option.{None}
+
+pub fn the_test() {
+  should.be_none(thing)
+}
+
+---- AFTER UPDATE
+
+import gleam/option.{None}
+
+pub fn the_test() {
+  assert thing == None
+}

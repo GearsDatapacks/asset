@@ -1,0 +1,20 @@
+---
+version: 1.3.1
+title: different_module
+file: ./test/asset_test.gleam
+test_name: different_module_test
+---
+---- ORIGINAL CODE
+
+import glest/expect
+
+pub fn the_test() {
+  expect.equal(a, b)
+}
+
+---- AFTER UPDATE
+
+
+pub fn the_test() {
+  assert a == b
+}

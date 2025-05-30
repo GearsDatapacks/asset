@@ -1,0 +1,22 @@
+---
+version: 1.3.1
+title: some_already_imported_unqualified
+file: ./test/asset_test.gleam
+test_name: some_already_imported_unqualified_test
+---
+---- ORIGINAL CODE
+
+import gleeunit/should
+import gleam/option.{Some}
+
+pub fn the_test() {
+  should.be_some(thing)
+}
+
+---- AFTER UPDATE
+
+import gleam/option.{Some}
+
+pub fn the_test() {
+  let assert Some(_) = thing
+}
