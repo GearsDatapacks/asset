@@ -5,6 +5,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/pair
 import gleam/result
 import gleam/string
 import glexer/token
@@ -110,7 +111,7 @@ fn statement(statement: glance.Statement, info: ModuleInfo) -> List(Edit) {
         glance.LetAssert(message: Some(message)) ->
           expressions([value, message], info, location.start)
       }
-    glance.Expression(e) -> expression(e, info, e.location.start)
+    glance.Expression(e) -> do_expression(e, info, e.location.start, Statement)
     glance.Use(function:, location:, ..) ->
       expression(function, info, location.start)
   }
@@ -153,23 +154,41 @@ fn clauses(
 }
 
 fn expression(
+  expression: glance.Expression,
+  info: ModuleInfo,
+  statement_start: Int,
+) -> List(Edit) {
+  do_expression(expression, info, statement_start, Expression)
+}
+
+fn do_expression(
   ast: glance.Expression,
   info: ModuleInfo,
   statement_start: Int,
+  position: AssertionPosition,
 ) -> List(Edit) {
   case ast {
     glance.BinaryOperator(location:, name:, left:, right:) ->
       case name {
-        glance.Pipe -> pipe(left, right, location, info, statement_start)
+        glance.Pipe ->
+          pipe(left, right, location, info, statement_start, position)
         _ -> Error(Nil)
       }
+      |> result.map(pair.second)
       |> result.lazy_unwrap(fn() {
         expressions([left, right], info, statement_start)
       })
     glance.BitString(..) -> []
     glance.Block(statements: body, ..) -> statements(body, info)
     glance.Call(location:, function:, arguments:) ->
-      call(location, function, arguments, info, statement_start)
+      call(location, function, arguments, info, statement_start, position)
+      |> result.map(pair.second)
+      |> result.lazy_unwrap(fn() {
+        list.append(
+          expression(function, info, statement_start),
+          fields(arguments, info, statement_start),
+        )
+      })
     glance.Case(subjects:, clauses: cs, ..) ->
       list.append(
         expressions(subjects, info, statement_start),
@@ -245,7 +264,8 @@ fn pipe(
   location: glance.Span,
   info: ModuleInfo,
   statement_start: Int,
-) -> Result(List(Edit), Nil) {
+  position: AssertionPosition,
+) -> Result(#(String, List(Edit)), Nil) {
   case right {
     glance.FieldAccess(
       container: glance.Variable(
@@ -262,6 +282,7 @@ fn pipe(
         pipe_args(left, []),
         info,
         statement_start,
+        position,
       )
     glance.Variable(name:, ..) ->
       transform_assertion(
@@ -271,6 +292,7 @@ fn pipe(
         pipe_args(left, []),
         info,
         statement_start,
+        position,
       )
     glance.Call(function:, arguments:, ..) ->
       function
@@ -284,6 +306,7 @@ fn pipe(
           pipe_args(left, arguments),
           info,
           statement_start,
+          position,
         )
       })
 
@@ -297,7 +320,8 @@ fn call(
   arguments: List(glance.Field(glance.Expression)),
   info: ModuleInfo,
   statement_start: Int,
-) -> List(Edit) {
+  position: AssertionPosition,
+) -> Result(#(String, List(Edit)), Nil) {
   function
   |> called_function
   |> result.try(fn(pair) {
@@ -309,14 +333,15 @@ fn call(
       arguments,
       info,
       statement_start,
+      position,
     )
   })
-  |> result.lazy_unwrap(fn() {
-    list.append(
-      expression(function, info, statement_start),
-      fields(arguments, info, statement_start),
-    )
-  })
+}
+
+type AssertionPosition {
+  Statement
+  Expression
+  InsideAssertion
 }
 
 fn transform_assertion(
@@ -326,7 +351,8 @@ fn transform_assertion(
   arguments: List(glance.Field(glance.Expression)),
   info: ModuleInfo,
   statement_start: Int,
-) -> Result(List(Edit), Nil) {
+  position: AssertionPosition,
+) -> Result(#(String, List(Edit)), Nil) {
   case assertion_function(info, module, name) {
     Error(_) -> Error(Nil)
     Ok(BeError) ->
@@ -336,23 +362,46 @@ fn transform_assertion(
         "Error",
         info,
         statement_start,
+        position,
       )
-    Ok(BeFalse) -> transform_bool_check(arguments, location, False, info)
+    Ok(BeFalse) ->
+      transform_bool_check(
+        arguments,
+        location,
+        False,
+        info,
+        position,
+        statement_start,
+      )
     Ok(BeNone) -> {
       case arguments {
         [glance.UnlabelledField(value)] -> {
           let precedence = glance.precedence(glance.Eq)
-          let value = maybe_wrap(value, info.src, precedence)
-          let #(none, edits) = option_constructor(NoneConstructor, info)
+          let #(value, expr_edits) =
+            maybe_wrap(value, info, precedence, statement_start)
+          let #(none, import_edits) = option_constructor(NoneConstructor, info)
 
           let assert_ = "assert " <> value <> " == " <> none
-          Ok([Edit(location.start, location.end, assert_), ..edits])
+          let #(value, edits) =
+            replace_or_return(
+              wrap_assert(assert_, position),
+              location,
+              position,
+            )
+          Ok(#(value, list.flatten([import_edits, expr_edits, edits])))
         }
         _ -> Error(Nil)
       }
     }
     Ok(BeOk) ->
-      transform_variant_check(arguments, location, "Ok", info, statement_start)
+      transform_variant_check(
+        arguments,
+        location,
+        "Ok",
+        info,
+        statement_start,
+        position,
+      )
     Ok(BeSome) -> {
       let #(some, import_edits) = option_constructor(SomeConstructor, info)
       let result =
@@ -362,13 +411,58 @@ fn transform_assertion(
           some,
           info,
           statement_start,
+          position,
         )
-      result.map(result, list.append(import_edits, _))
+      result.map(result, fn(pair) {
+        #(pair.0, list.append(import_edits, pair.1))
+      })
     }
-    Ok(BeTrue) -> transform_bool_check(arguments, location, True, info)
-    Ok(Equal) -> transform_comparison(arguments, location, "==", info)
-    Ok(NotEqual) -> transform_comparison(arguments, location, "!=", info)
-    Ok(Fail) -> Ok([Edit(location.start, location.end, "panic")])
+    Ok(BeTrue) ->
+      transform_bool_check(
+        arguments,
+        location,
+        True,
+        info,
+        position,
+        statement_start,
+      )
+    Ok(Equal) ->
+      transform_comparison(
+        arguments,
+        location,
+        "==",
+        info,
+        position,
+        statement_start,
+      )
+    Ok(NotEqual) ->
+      transform_comparison(
+        arguments,
+        location,
+        "!=",
+        info,
+        position,
+        statement_start,
+      )
+    Ok(Fail) -> Ok(replace_or_return("panic", location, position))
+  }
+}
+
+fn replace_or_return(
+  text: String,
+  location: glance.Span,
+  position: AssertionPosition,
+) -> #(String, List(Edit)) {
+  case position {
+    Expression | Statement -> #("", [Edit(location.start, location.end, text)])
+    InsideAssertion -> #(text, [])
+  }
+}
+
+fn wrap_assert(assert_: String, position: AssertionPosition) -> String {
+  case position {
+    Expression | InsideAssertion -> "{ " <> assert_ <> " }"
+    Statement -> assert_
   }
 }
 
@@ -406,11 +500,12 @@ fn option_constructor(
 
 fn maybe_wrap(
   expression: glance.Expression,
-  src: String,
+  info: ModuleInfo,
   precedence: Int,
-) -> String {
-  let expr_src = slice(src, expression.location.start, expression.location.end)
-  case expression {
+  statement_start: Int,
+) -> #(String, List(Edit)) {
+  let #(expr_src, edits) = get_src(expression, info, statement_start)
+  let expr = case expression {
     glance.BinaryOperator(name:, ..) ->
       case glance.precedence(name) > precedence {
         True -> expr_src
@@ -418,6 +513,32 @@ fn maybe_wrap(
       }
     _ -> expr_src
   }
+  #(expr, edits)
+}
+
+fn get_src(
+  expression: glance.Expression,
+  info: ModuleInfo,
+  statement_start: Int,
+) -> #(String, List(Edit)) {
+  case expression {
+    glance.Variable(name:, ..) -> Ok(#(name, []))
+    glance.BinaryOperator(name: glance.Pipe, left:, right:, location:) ->
+      pipe(left, right, location, info, statement_start, InsideAssertion)
+    glance.Call(location:, function:, arguments:) ->
+      call(
+        location,
+        function,
+        arguments,
+        info,
+        statement_start,
+        InsideAssertion,
+      )
+    _ -> Error(Nil)
+  }
+  |> result.lazy_unwrap(fn() {
+    #(slice(info.src, expression.location.start, expression.location.end), [])
+  })
 }
 
 fn transform_comparison(
@@ -425,16 +546,22 @@ fn transform_comparison(
   location: glance.Span,
   operator: String,
   info: ModuleInfo,
-) -> Result(List(Edit), Nil) {
+  position: AssertionPosition,
+  statement_start: Int,
+) -> Result(#(String, List(Edit)), Nil) {
   let precedence = glance.precedence(glance.Eq)
 
   case arguments {
     [glance.UnlabelledField(left), glance.UnlabelledField(right)] -> {
-      let left = maybe_wrap(left, info.src, precedence)
-      let right = maybe_wrap(right, info.src, precedence)
+      let #(left, left_edits) =
+        maybe_wrap(left, info, precedence, statement_start)
+      let #(right, right_edits) =
+        maybe_wrap(right, info, precedence, statement_start)
 
       let assert_ = "assert " <> left <> " " <> operator <> " " <> right
-      Ok([Edit(location.start, location.end, assert_)])
+      let #(value, edits) =
+        replace_or_return(wrap_assert(assert_, position), location, position)
+      Ok(#(value, list.flatten([left_edits, right_edits, edits])))
     }
     _ -> Error(Nil)
   }
@@ -445,20 +572,24 @@ fn transform_bool_check(
   location: glance.Span,
   check_for: Bool,
   info: ModuleInfo,
-) -> Result(List(Edit), Nil) {
+  position: AssertionPosition,
+  statement_start: Int,
+) -> Result(#(String, List(Edit)), Nil) {
   case arguments {
     [glance.UnlabelledField(value)] -> {
-      let assert_ = case check_for {
+      let #(assert_, value_edits) = case check_for {
         False -> {
-          let value = maybe_wrap(value, info.src, 100)
-          "assert !" <> value
+          let #(value, edits) = maybe_wrap(value, info, 100, statement_start)
+          #("assert !" <> value, edits)
         }
         True -> {
-          let value = slice(info.src, value.location.start, value.location.end)
-          "assert " <> value
+          let #(value, edits) = get_src(value, info, statement_start)
+          #("assert " <> value, edits)
         }
       }
-      Ok([Edit(location.start, location.end, assert_)])
+      let #(value, edits) =
+        replace_or_return(wrap_assert(assert_, position), location, position)
+      Ok(#(value, list.append(value_edits, edits)))
     }
     _ -> Error(Nil)
   }
@@ -470,17 +601,48 @@ fn transform_variant_check(
   variant_name: String,
   info: ModuleInfo,
   statement_start: Int,
-) -> Result(List(Edit), Nil) {
+  position: AssertionPosition,
+) -> Result(#(String, List(Edit)), Nil) {
   case arguments {
     [glance.UnlabelledField(value)] -> {
-      let value = slice(info.src, value.location.start, value.location.end)
+      let #(value, value_edits) = get_src(value, info, statement_start)
+      let variable_name = case position {
+        Expression | InsideAssertion -> "value"
+        Statement -> "_"
+      }
       let assignment =
-        "let assert " <> variant_name <> "(value) = " <> value <> "\n"
+        "let assert "
+        <> variant_name
+        <> "("
+        <> variable_name
+        <> ") = "
+        <> value
+        <> "\n"
 
-      Ok([
-        Edit(statement_start, statement_start, assignment),
-        Edit(location.start, location.end, "value"),
-      ])
+      case position {
+        Expression ->
+          Ok(
+            #(variable_name, [
+              Edit(statement_start, statement_start, assignment),
+              Edit(location.start, location.end, variable_name),
+              ..value_edits
+            ]),
+          )
+        Statement ->
+          Ok(
+            #(variable_name, [
+              Edit(location.start, location.end, assignment),
+              ..value_edits
+            ]),
+          )
+        InsideAssertion ->
+          Ok(
+            #(variable_name, [
+              Edit(statement_start, statement_start, assignment),
+              ..value_edits
+            ]),
+          )
+      }
     }
     _ -> Error(Nil)
   }
