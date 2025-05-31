@@ -197,3 +197,27 @@ pub fn operator_precedence_equal_test() {
   |> snap
   |> birdie.snap("operator_precedence_equal")
 }
+
+pub fn transform_single_pipe_test() {
+  "a |> transform |> should.equal(10)"
+  |> snap
+  |> birdie.snap("transform_single_pipe")
+}
+
+pub fn transform_single_pipe_call_test() {
+  "a |> transform(10) |> should.equal(10)"
+  |> snap
+  |> birdie.snap("transform_single_pipe_call")
+}
+
+pub fn transform_single_pipe_call_labelled_test() {
+  "a |> transform(10, thing: 20, other:) |> should.equal(10)"
+  |> snap
+  |> birdie.snap("transform_single_pipe_call_labelled")
+}
+
+pub fn do_not_transform_multi_pipe_test() {
+  "a |> do_thing |> other_thing |> should.equal(10)"
+  |> snap
+  |> birdie.snap("do_not_transform_multi_pipe")
+}

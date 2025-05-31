@@ -551,7 +551,14 @@ fn get_src(
   case expression {
     glance.Variable(name:, ..) -> Ok(#(name, []))
     glance.BinaryOperator(name: glance.Pipe, left:, right:, location:) ->
-      pipe(left, right, location, info, statement_start, InsideAssertion)
+      case pipe(left, right, location, info, statement_start, InsideAssertion) {
+        Ok(value) -> Ok(value)
+        Error(_) ->
+          case left {
+            glance.BinaryOperator(name: glance.Pipe, ..) -> Error(Nil)
+            _ -> Ok(#(pipe_to_call(info.src, left, right), []))
+          }
+      }
     glance.Call(location:, function:, arguments:) ->
       call(
         location,
@@ -564,8 +571,40 @@ fn get_src(
     _ -> Error(Nil)
   }
   |> result.lazy_unwrap(fn() {
-    #(slice(info.src, expression.location.start, expression.location.end), [])
+    #(do_get_src(info.src, expression.location), [])
   })
+}
+
+fn pipe_to_call(
+  src: String,
+  left: glance.Expression,
+  right: glance.Expression,
+) -> String {
+  let #(function, arguments) = case right {
+    glance.Call(function:, arguments:, ..) -> #(function, arguments)
+    _ -> #(right, [])
+  }
+
+  let arguments = [glance.UnlabelledField(left), ..arguments]
+
+  let argument_strings =
+    list.map(arguments, fn(argument) {
+      case argument {
+        glance.LabelledField(label:, item:) ->
+          label <> ": " <> do_get_src(src, item.location)
+        glance.ShorthandField(label:) -> label <> ":"
+        glance.UnlabelledField(item:) -> do_get_src(src, item.location)
+      }
+    })
+
+  do_get_src(src, function.location)
+  <> "("
+  <> string.join(argument_strings, ", ")
+  <> ")"
+}
+
+fn do_get_src(src: String, location: glance.Span) {
+  slice(src, location.start, location.end)
 }
 
 fn transform_comparison(
