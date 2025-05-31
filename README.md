@@ -10,7 +10,7 @@ went wrong.
 
 ### Usage
 
-To use `asset`, simply download the escript from the [release page](https://github.com/GearsDatapacks/asset/releases/tag/v1.0.0),
+To use `asset`, simply download the escript from the [release page](https://github.com/GearsDatapacks/asset/releases/tag/v1.1.0),
 or add it to your project as a dev dependency, using `gleam add asset --dev`.
 From there, you can run the CLI.
 
