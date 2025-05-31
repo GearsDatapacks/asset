@@ -1,0 +1,20 @@
+---
+version: 1.3.1
+title: operator_precedence_high_enough
+file: ./test/asset_test.gleam
+test_name: operator_precedence_high_enough_test
+---
+---- ORIGINAL CODE
+
+import gleeunit/should
+
+pub fn the_test() {
+  should.equal(1 + 2, 3)
+}
+
+---- AFTER UPDATE
+
+
+pub fn the_test() {
+  assert 1 + 2 == 3
+}

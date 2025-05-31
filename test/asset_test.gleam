@@ -179,3 +179,21 @@ pub fn none_already_imported_aliased_test() {
   )
   |> birdie.snap("none_already_imported_aliased")
 }
+
+pub fn operator_precedence_test() {
+  "should.equal(True && False, False)"
+  |> snap
+  |> birdie.snap("operator_precedence")
+}
+
+pub fn operator_precedence_high_enough_test() {
+  "should.equal(1 + 2, 3)"
+  |> snap
+  |> birdie.snap("operator_precedence_high_enough")
+}
+
+pub fn operator_precedence_equal_test() {
+  "should.equal(True == False, False)"
+  |> snap
+  |> birdie.snap("operator_precedence_equal")
+}
