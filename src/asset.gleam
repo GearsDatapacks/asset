@@ -669,8 +669,14 @@ fn transform_bool_check(
     [glance.UnlabelledField(value)] -> {
       let #(assert_, value_edits) = case check_for {
         False -> {
-          let #(value, edits) = maybe_wrap(value, info, 100, statement_start)
-          #("assert !" <> value, edits)
+          case invert_value(value, info, statement_start) {
+            Ok(#(inverted, edits)) -> #("assert " <> inverted, edits)
+            Error(_) -> {
+              let #(value, edits) =
+                maybe_wrap(value, info, 100, statement_start)
+              #("assert !" <> value, edits)
+            }
+          }
         }
         True -> {
           let #(value, edits) = get_src(value, info, statement_start)
@@ -682,6 +688,87 @@ fn transform_bool_check(
       Ok(#(value, list.append(value_edits, edits)))
     }
     _ -> Error(Nil)
+  }
+}
+
+fn invert_value(
+  value: glance.Expression,
+  info: ModuleInfo,
+  statement_start: Int,
+) -> Result(#(String, List(Edit)), Nil) {
+  case value {
+    glance.BinaryOperator(name:, left:, right:, ..) -> {
+      let inverted_name = case name {
+        glance.AddFloat
+        | glance.AddInt
+        | glance.Concatenate
+        | glance.DivFloat
+        | glance.DivInt
+        | glance.MultFloat
+        | glance.MultInt
+        | glance.Pipe
+        | glance.RemainderInt
+        | glance.SubFloat
+        | glance.SubInt
+        | glance.And
+        | glance.Or -> Error(Nil)
+
+        glance.Eq -> Ok(glance.NotEq)
+        glance.GtEqFloat -> Ok(glance.LtFloat)
+        glance.GtEqInt -> Ok(glance.LtInt)
+        glance.GtFloat -> Ok(glance.LtEqFloat)
+        glance.GtInt -> Ok(glance.LtEqInt)
+        glance.LtEqFloat -> Ok(glance.GtFloat)
+        glance.LtEqInt -> Ok(glance.GtInt)
+        glance.LtFloat -> Ok(glance.GtEqFloat)
+        glance.LtInt -> Ok(glance.GtEqInt)
+        glance.NotEq -> Ok(glance.Eq)
+      }
+
+      case inverted_name {
+        Ok(name) -> {
+          let precedence = glance.precedence(name)
+          let #(left, left_edits) =
+            maybe_wrap(left, info, precedence, statement_start)
+          let #(right, right_edits) =
+            maybe_wrap(right, info, precedence, statement_start)
+
+          let edits = list.append(left_edits, right_edits)
+          let operator_string = operator_to_string(name)
+          Ok(#(left <> " " <> operator_string <> " " <> right, edits))
+        }
+        Error(_) -> Error(Nil)
+      }
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn operator_to_string(name: glance.BinaryOperator) -> String {
+  case name {
+    glance.AddFloat -> "+."
+    glance.AddInt -> "+"
+    glance.And -> "&&"
+    glance.Concatenate -> "<>"
+    glance.DivFloat -> "/."
+    glance.DivInt -> "/"
+    glance.Eq -> "=="
+    glance.GtEqFloat -> ">=."
+    glance.GtEqInt -> ">="
+    glance.GtFloat -> ">."
+    glance.GtInt -> ">"
+    glance.LtEqFloat -> "<=."
+    glance.LtEqInt -> "<="
+    glance.LtFloat -> "<=."
+    glance.LtInt -> "<"
+    glance.MultFloat -> "*."
+    glance.MultInt -> "*"
+    glance.NotEq -> "!="
+    glance.Or -> "||"
+    glance.Pipe -> "|>"
+    glance.RemainderInt -> "%"
+    glance.SubFloat -> "-."
+    glance.SubInt -> "-"
   }
 }
 

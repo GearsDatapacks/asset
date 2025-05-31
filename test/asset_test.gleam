@@ -245,3 +245,9 @@ pub fn multi_pipe_precedence_test() {
   |> snap
   |> birdie.snap("multi_pipe_precedence")
 }
+
+pub fn inverted_binary_operator_test() {
+  "should.be_false(a < b)"
+  |> snap
+  |> birdie.snap("inverted_binary_operator")
+}
