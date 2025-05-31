@@ -1,5 +1,5 @@
 name = "asset"
-version = "1.1.0"
+version = "1.2.0"
 
 description = "A tool for converting to Gleam's new `assert` syntax"
 licences = ["Apache-2.0"]
