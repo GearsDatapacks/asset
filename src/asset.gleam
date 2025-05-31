@@ -70,7 +70,10 @@ pub fn update_text(
 
 fn update_file(path: String, contents: String, target_module: String) -> Nil {
   case update_text(contents, target_module) {
-    Error(NoImportFound) -> Nil
+    Error(NoImportFound) ->
+      io.println_error(
+        "No references to `" <> target_module <> "` found in " <> path,
+      )
     Error(ParsingFailed(error)) ->
       io.println_error(
         "Failed to parse file " <> path <> ": " <> glance_error(error),
@@ -78,7 +81,7 @@ fn update_file(path: String, contents: String, target_module: String) -> Nil {
     Ok(text) ->
       case file.write(path, text) {
         Error(error) -> print_error("write to file", path, error)
-        Ok(_) -> Nil
+        Ok(_) -> io.println_error("Successfully updated " <> path)
       }
   }
 }
