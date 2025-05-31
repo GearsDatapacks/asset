@@ -532,8 +532,22 @@ fn maybe_wrap(
   statement_start: Int,
 ) -> #(String, List(Edit)) {
   let #(expr_src, edits) = get_src(expression, info, statement_start)
+
+  let was_transformed = case expression {
+    glance.BinaryOperator(
+      name: glance.Pipe,
+      left: glance.BinaryOperator(
+        name: glance.Pipe,
+        ..,
+      ),
+      ..,
+    ) -> False
+    glance.BinaryOperator(name: glance.Pipe, ..) -> True
+    _ -> False
+  }
+
   let expr = case expression {
-    glance.BinaryOperator(name:, ..) ->
+    glance.BinaryOperator(name:, ..) if !was_transformed ->
       case glance.precedence(name) > precedence {
         True -> expr_src
         False -> "{ " <> expr_src <> " }"

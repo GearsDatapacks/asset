@@ -233,3 +233,15 @@ pub fn single_pipe_function_capture_with_label_test() {
   |> snap
   |> birdie.snap("single_pipe_function_capture_with_label")
 }
+
+pub fn single_pipe_single_precedence_test() {
+  "a |> transform |> should.be_false"
+  |> snap
+  |> birdie.snap("single_pipe_single_precedence")
+}
+
+pub fn multi_pipe_precedence_test() {
+  "a |> do_thing |> other_thing |> should.be_false"
+  |> snap
+  |> birdie.snap("multi_pipe_precedence")
+}
