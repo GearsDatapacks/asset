@@ -14,6 +14,7 @@ import simplifile as file
 
 const should_module = "gleeunit/should"
 
+/// Call the `asset` CLI.
 pub fn main() -> Nil {
   let argv = argv.load()
 
@@ -36,6 +37,8 @@ pub type Error {
   NoImportFound
 }
 
+/// Updates a single file to use `assert` syntax. Accepts the target module to
+/// replace. `gleeunit/should` should be used for most cases.
 pub fn update_text(
   contents: String,
   target_module: String,
