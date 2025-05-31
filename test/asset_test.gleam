@@ -221,3 +221,15 @@ pub fn do_not_transform_multi_pipe_test() {
   |> snap
   |> birdie.snap("do_not_transform_multi_pipe")
 }
+
+pub fn single_pipe_function_capture_test() {
+  "a |> add(1, _) |> should.equal(3)"
+  |> snap
+  |> birdie.snap("single_pipe_function_capture")
+}
+
+pub fn single_pipe_function_capture_with_label_test() {
+  "a |> add(left: 1, right: _) |> should.equal(3)"
+  |> snap
+  |> birdie.snap("single_pipe_function_capture_with_label")
+}

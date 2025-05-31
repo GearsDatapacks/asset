@@ -580,12 +580,22 @@ fn pipe_to_call(
   left: glance.Expression,
   right: glance.Expression,
 ) -> String {
-  let #(function, arguments) = case right {
-    glance.Call(function:, arguments:, ..) -> #(function, arguments)
-    _ -> #(right, [])
+  let #(function, before, after, label) = case right {
+    glance.Call(function:, arguments:, ..) -> #(function, [], arguments, None)
+    glance.FnCapture(label:, function:, arguments_before:, arguments_after:, ..) -> #(
+      function,
+      arguments_before,
+      arguments_after,
+      label,
+    )
+    _ -> #(right, [], [], None)
   }
 
-  let arguments = [glance.UnlabelledField(left), ..arguments]
+  let piped_argument = case label {
+    None -> glance.UnlabelledField(left)
+    Some(label) -> glance.LabelledField(label:, item: left)
+  }
+  let arguments = list.flatten([before, [piped_argument], after])
 
   let argument_strings =
     list.map(arguments, fn(argument) {
