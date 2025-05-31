@@ -8,6 +8,8 @@
 `assert` syntax, which is preferred as it provides more information about what
 went wrong.
 
+### Usage
+
 To use `asset`, simply download the escript from the [release page](https://github.com/GearsDatapacks/asset/releases/tag/v1.0.0),
 or add it to your project as a dev dependency, using `gleam add asset --dev`.
 From there, you can run the CLI.
@@ -25,6 +27,12 @@ and update any references to `gleeunit/should` functions into `assert` and
 ```sh
 asset update test/
 ```
+
+After using `asset` to update code, you should probably run `gleam format`. `asset`
+tries to generate well formatted code, but its output is not 100% accurate to
+the way the Gleam formatter formats code.
+
+### Edge-cases
 
 In specific codebases, such as the standard library (and probably only the standard
 library), `gleeunit` cannot be used. In the standard library, this is because
